@@ -1,13 +1,34 @@
 import matplotlib.pyplot as plt
 import numpy as np
 
-from jko_primal-dual import *
+from jko_primal_dual import *
 
-N_cells = 100
-N_timestep = 100
-x_left = 0.
-x_right = 1.
-T = 1.
+N_x = 8
+N_t = 8
 #
 
-x_edge, x_cell, t = get_grid(x_left, x_right, N_x, T, N_timestep) 
+probl = Problem(
+    N_x,
+    N_t,
+    lambda _x: np.exp(-(_x ** 2) / 2.0),
+    lambda _x: np.log(_x) + 1.0,
+    lambda _x: -((_x - 1.0) ** 2),
+    deltas=(1e-7,) * 4,
+)
+
+primal_variables = probl.get_primal_variables()
+dual_variables = probl.get_dual_variables()
+
+u = primal_variables
+Au = probl.apply_A_pde(primal_variables)
+
+phi = dual_variables[0]
+At_phi = probl.apply_At_pde(dual_variables)
+
+dot_in_primal = u.ravel() @ At_phi.ravel()
+dot_in_dual= Au.ravel() @ phi.ravel()
+
+print(dot_in_primal, dot_in_dual, np.abs(dot_in_primal - dot_in_dual))
+
+
+
