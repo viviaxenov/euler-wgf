@@ -48,7 +48,7 @@ class Problem:
         self.dx = x_edge[1]
         self.dt = self.t[1]
         # cell volume for integration
-        self.cell_vol = self.dx ** spatial_dim
+        self.cell_vol = self.dx**spatial_dim
 
         self.U_prime = internal_energy_derivative_fn
         self.V = potential_energy_fn
@@ -91,9 +91,9 @@ class Problem:
 
         return Au
 
-    def apply_At_pde(self, dual_variables):
+    def apply_At_pde(self, phi):
         # apply the ADJOINT operator to the one that evaluates PDE constraint residual
-        phi = dual_variables[0]
+        # phi = dual_variables[0]
 
         rho = -phi[1:, :] + phi[:-1, :]
         rho = np.vstack(
@@ -121,9 +121,18 @@ class Problem:
 
         # in the paper it's m_boundary*(dx)^(d-1)*dt but i think it's better to rescale delta at prox step
         # ! need to be careful with the scaling of dual variables !
-        return m[:, [0, -1]]
+        return m[:-1, [0, -1]]
+
+    def apply_At_boundary_condition(self, phi):
+        # phi = dual_variables[1]
+        rho = np.zeros((self.N_t, self.N_x))
+        m = rho.copy()
+        m[:-1, [0, -1]] = phi
+
+        return np.stack((rho, m))
 
     def apply_A_mass(self, primal_variables):
+        # This is actually dense, but maybe .sum is still better optimized
         rho = primal_variables[0, :, :]
         # in the paper it's *(dx)^(d)*dt but i think it's better to rescale delta at prox step
         # ! need to be careful with the scaling of dual variables !

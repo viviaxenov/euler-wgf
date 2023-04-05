@@ -21,18 +21,24 @@ probl = Problem(
 primal_variables = probl.get_primal_variables()
 dual_variables = probl.get_dual_variables()
 
-u = normal(size=primal_variables.shape)
-phi = normal(size=dual_variables[0].shape)
+errors = []
 
-Au = probl.apply_A_pde(u)
+for _ in range(1000):
+    u = normal(size=primal_variables.shape)
+    phi = normal(size=dual_variables[1].shape)
 
-At_phi = probl.apply_At_pde((phi,))
+    Au = probl.apply_A_boundary_condition(u)
+    At_phi = probl.apply_At_boundary_condition((phi,))
 
-dot_in_primal = u.ravel() @ At_phi.ravel()
-dot_in_dual= Au.ravel() @ phi.ravel()
+    dot_in_primal = u.ravel() @ At_phi.ravel()
+    dot_in_dual= Au.ravel() @ phi.ravel()
+    errors.append(np.abs(dot_in_primal - dot_in_dual))
+
+errors = np.array(errors)
+
+print(errors.max(), errors.mean())
 
 
-print(dot_in_primal, dot_in_dual, np.abs(dot_in_primal - dot_in_dual))
 
 
 
