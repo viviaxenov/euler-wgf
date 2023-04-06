@@ -5,7 +5,7 @@ from numpy.random import normal
 
 from jko_primal_dual import *
 
-N_x = 8
+N_x = 10
 N_t = 8
 #
 
@@ -25,21 +25,15 @@ errors = []
 
 for _ in range(1000):
     u = normal(size=primal_variables.shape)
-    phi = normal(size=dual_variables[1].shape)
+    phi = tuple(normal(size=_phi.shape) for _phi in dual_variables)
 
-    Au = probl.apply_A_boundary_condition(u)
-    At_phi = probl.apply_At_boundary_condition((phi,))
+    Au = probl.apply_A(u)
+    At_phi = probl.apply_At(phi)
 
     dot_in_primal = u.ravel() @ At_phi.ravel()
-    dot_in_dual= Au.ravel() @ phi.ravel()
+    dot_in_dual= np.sum([Au[i].ravel() @ phi[i].ravel() for i in range(4)])
     errors.append(np.abs(dot_in_primal - dot_in_dual))
 
 errors = np.array(errors)
 
 print(errors.max(), errors.mean())
-
-
-
-
-
-

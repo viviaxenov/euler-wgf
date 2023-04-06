@@ -48,7 +48,7 @@ class Problem:
         self.dx = x_edge[1]
         self.dt = self.t[1]
         # cell volume for integration
-        self.cell_vol = self.dx**spatial_dim
+        self.cell_vol = self.dx ** spatial_dim
 
         self.U_prime = internal_energy_derivative_fn
         self.V = potential_energy_fn
@@ -77,7 +77,7 @@ class Problem:
         return tuple(duals)
 
     # b_i in constraints are used on the Prox step
-    def apply_A_pde(self, primal_variables):
+    def apply_A_pde(self, primal_variables: np.ndarray):
         """check continuity equation in interioir cells"""
 
         u = primal_variables
@@ -91,7 +91,7 @@ class Problem:
 
         return Au
 
-    def apply_At_pde(self, phi):
+    def apply_At_pde(self, phi: np.ndarray):
         # apply the ADJOINT operator to the one that evaluates PDE constraint residual
         # phi = dual_variables[0]
 
@@ -115,7 +115,7 @@ class Problem:
 
         return np.stack((rho, m))
 
-    def apply_A_boundary_condition(self, primal_variables):
+    def apply_A_boundary_condition(self, primal_variables: np.ndarray):
         """m at boundary should be approx. 0"""
         m = primal_variables[1, :, :]
 
@@ -123,7 +123,7 @@ class Problem:
         # ! need to be careful with the scaling of dual variables !
         return m[:-1, [0, -1]]
 
-    def apply_At_boundary_condition(self, phi):
+    def apply_At_boundary_condition(self, phi: np.ndarray):
         # phi = dual_variables[1]
         rho = np.zeros((self.N_t, self.N_x))
         m = rho.copy()
@@ -139,16 +139,41 @@ class Problem:
 
         return rho.sum(axis=1)
 
+    def apply_At_mass(self, phi: np.ndarray):
+        m = np.zeros((self.N_t, self.N_x))
+        rho = np.broadcast_to(np.atleast_2d(phi).T, m.shape)
+        return np.stack((rho, m))
+
     def apply_A_initial_condition(self, primal_variables):
 
         rho = primal_variables[0, :, :]
         return rho[0, :]
 
-    def apply_A(self, primal_variables):
+    def apply_At_initial_condition(self, phi: np.ndarray):
+        m = np.zeros((self.N_t, self.N_x))
+        rho = m.copy()
+        rho[0, :] = phi
+        return np.stack((rho, m))
 
+    def apply_A(self, primal_variables: np.ndarray):
         return (
             self.apply_A_pde(primal_variables),
             self.apply_A_boundary_condition(primal_variables),
             self.apply_A_mass(primal_variables),
             self.apply_A_initial_condition(primal_variables),
         )
+
+    def apply_At(self, dual_variables: Tuple[np.ndarray]):
+        return np.sum(
+            np.stack(
+                (
+                    self.apply_At_pde(dual_variables[0]),
+                    self.apply_At_boundary_condition(dual_variables[1]),
+                    self.apply_At_mass(dual_variables[2]),
+                    self.apply_At_initial_condition(dual_variables[3]),
+                )
+            ),
+            axis=0,
+        )
+
+
