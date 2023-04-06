@@ -60,16 +60,14 @@ class Problem:
         # idk if its necessary?
         self.rho_0_h = rho_0_h / np.sum(rho_0_h) * self.cell_vol
 
-    def get_primal_variables(
-        self,
-    ) -> np.ndarray:
+    def get_primal_variables(self) -> np.ndarray:
 
         rho = np.stack((self.rho_0_h,) * self.N_t)
         m = np.stack((np.zeros_like(self.rho_0_h),) * self.N_t)
 
         return np.stack((rho, m))
 
-    def get_dual_variables(self):
+    def get_dual_variables(self) -> Tuple[np.ndarray]:
         # it's stupid but I'll rewrite it later
         Au = self.apply_A(self.get_primal_variables())
         duals = [np.zeros_like(_x) for _x in Au]
@@ -77,7 +75,7 @@ class Problem:
         return tuple(duals)
 
     # b_i in constraints are used on the Prox step
-    def apply_A_pde(self, primal_variables: np.ndarray):
+    def apply_A_pde(self, primal_variables: np.ndarray) -> np.ndarray:
         """check continuity equation in interioir cells"""
 
         u = primal_variables
@@ -91,7 +89,7 @@ class Problem:
 
         return Au
 
-    def apply_At_pde(self, phi: np.ndarray):
+    def apply_At_pde(self, phi: np.ndarray) -> np.ndarray:
         # apply the ADJOINT operator to the one that evaluates PDE constraint residual
         # phi = dual_variables[0]
 
@@ -123,7 +121,7 @@ class Problem:
         # ! need to be careful with the scaling of dual variables !
         return m[:-1, [0, -1]]
 
-    def apply_At_boundary_condition(self, phi: np.ndarray):
+    def apply_At_boundary_condition(self, phi: np.ndarray) -> np.ndarray:
         # phi = dual_variables[1]
         rho = np.zeros((self.N_t, self.N_x))
         m = rho.copy()
@@ -131,7 +129,7 @@ class Problem:
 
         return np.stack((rho, m))
 
-    def apply_A_mass(self, primal_variables):
+    def apply_A_mass(self, primal_variables) -> np.ndarray:
         # This is actually dense, but maybe .sum is still better optimized
         rho = primal_variables[0, :, :]
         # in the paper it's *(dx)^(d)*dt but i think it's better to rescale delta at prox step
@@ -139,23 +137,23 @@ class Problem:
 
         return rho.sum(axis=1)
 
-    def apply_At_mass(self, phi: np.ndarray):
+    def apply_At_mass(self, phi: np.ndarray) -> np.ndarray:
         m = np.zeros((self.N_t, self.N_x))
         rho = np.broadcast_to(np.atleast_2d(phi).T, m.shape)
         return np.stack((rho, m))
 
-    def apply_A_initial_condition(self, primal_variables):
+    def apply_A_initial_condition(self, primal_variables) -> np.ndarray:
 
         rho = primal_variables[0, :, :]
         return rho[0, :]
 
-    def apply_At_initial_condition(self, phi: np.ndarray):
+    def apply_At_initial_condition(self, phi: np.ndarray) -> np.ndarray:
         m = np.zeros((self.N_t, self.N_x))
         rho = m.copy()
         rho[0, :] = phi
         return np.stack((rho, m))
 
-    def apply_A(self, primal_variables: np.ndarray):
+    def apply_A(self, primal_variables: np.ndarray) -> Tuple[np.ndarray]:
         return (
             self.apply_A_pde(primal_variables),
             self.apply_A_boundary_condition(primal_variables),
@@ -163,7 +161,7 @@ class Problem:
             self.apply_A_initial_condition(primal_variables),
         )
 
-    def apply_At(self, dual_variables: Tuple[np.ndarray]):
+    def apply_At(self, dual_variables: Tuple[np.ndarray]) -> np.ndarray:
         return np.sum(
             np.stack(
                 (
@@ -175,5 +173,3 @@ class Problem:
             ),
             axis=0,
         )
-
-
