@@ -32,7 +32,7 @@ class Problem:
         if not spatial_dim == 1:
             raise NotImplementedError
 
-        self.deltas = deltas
+        self.deltas = np.array(deltas)
 
         self.N_t = N_t
         self.N_x = N_x
@@ -48,17 +48,37 @@ class Problem:
         self.dx = x_edge[1]
         self.dt = self.t[1]
         # cell volume for integration
-        self.cell_vol = self.dx ** spatial_dim
+        self.cell_vol = self.dx**spatial_dim
 
         self.U_prime = internal_energy_derivative_fn
         self.V = potential_energy_fn
         # Certainly won't do it for a high-dimensional example, but for 1-2d will do
         self.V_cell = potential_energy_fn(self.x_cell)
 
+        # Prepare r.h.s. and tols needed in proximal mapping in dual space
+        # Initial density for I.C. constraint check
         rho_0_h = rho_init(self.x_cell)
         # normalize so that integral of discretized rho is equal to 1
-        # idk if its necessary?
         self.rho_0_h = rho_0_h / np.sum(rho_0_h) * self.cell_vol
+        self.rhs = [0.0, 0.0, 1.0, self.rho_0_h]
+
+        # I believe that there could be some inconsistency in the paper
+        # So i define these tols for prox evaluation so that the constraints (30-31) hold for delta := self.delta (user-defined)
+        # and then delta from definition of prox := self.tols
+        self.tols = (
+            self.deltas
+            / (
+                np.array(
+                    [
+                        self.cell_vol * self.dt,
+                        self.dx * self.dt,
+                        1.0,
+                        self.cell_vol,
+                    ]
+                )
+            )
+            ** 0.5
+        )
 
     def get_primal_variables(self) -> np.ndarray:
 
@@ -83,6 +103,7 @@ class Problem:
         m = u[1, :, :]
 
         # use centered difference for d/dx for now, maybe use C.N. later
+        # TODO maybe we should make an array of cell vols? for grid with cells of diff.size (but same vol)?
         Au = (rho[1:, 1:-1] - rho[:-1, 1:-1]) / self.dt + (
             m[:-1, 2:] - m[:-1, :-2]
         ) / self.dx / 2.0
@@ -90,9 +111,10 @@ class Problem:
         return Au
 
     def apply_At_pde(self, phi: np.ndarray) -> np.ndarray:
-        # apply the ADJOINT operator to the one that evaluates PDE constraint residual
-        # phi = dual_variables[0]
-
+        """
+        apply the ADJOINT operator to the one that evaluates PDE constraint residual
+        phi = dual_variables[0]
+        """
         rho = -phi[1:, :] + phi[:-1, :]
         rho = np.vstack(
             (
@@ -117,9 +139,9 @@ class Problem:
         """m at boundary should be approx. 0"""
         m = primal_variables[1, :, :]
 
-        # in the paper it's m_boundary*(dx)^(d-1)*dt but i think it's better to rescale delta at prox step
-        # ! need to be careful with the scaling of dual variables !
-        return m[:-1, [0, -1]]
+        # TODO would multiply by cell face area (would be different from dx in general);
+        # maybe need to think/read more about this from the perspective of Finite Volume methods
+        return m[:-1, [0, -1]] * self.dx * self.dt
 
     def apply_At_boundary_condition(self, phi: np.ndarray) -> np.ndarray:
         # phi = dual_variables[1]
@@ -173,3 +195,55 @@ class Problem:
             ),
             axis=0,
         )
+
+    def prox_in_primal(
+        self, primal_variables: np.ndarray, stepsize: float
+    ) -> np.ndarray:
+        """Prox map of functional \Varphi, which involves taking a root of a polynomial; see eq (36)"""
+
+        rho = primal_variables[0, :, :]
+        m = primal_variables[1, :, :]
+
+        _lambda = stepsize
+
+        # define coefs of a polynomial
+        # these are all element-wise
+        b = 2.0 * _lambda - rho
+        c = _lambda * (_lambda - 2.0 * rho)
+        d = -_lambda * (m**2 / 2.0 - rho * _lambda)
+
+        # define coefs of a reduced polynomial
+        p = c - b**2 / 3.0
+        q = (2 * b**3 - 9 * b * c + 27 * d) / 27.0
+
+        assert np.all(Q > 0)
+        # TODO maybe we can't rule out the case with Q = 0
+        # it's probably the case with |m| = 0=> rho = 0 => new_rho = 0
+        # but i'll have to pass the IF 'to C level'
+        # maybe there won't be this problem with iterative method
+        Q = (p / 3.0) ** 3 + (q / 2.0) ** 2
+
+        # find root of the reduced polynomial with explicit Cardano formula
+        # wonder if all of them used it too...
+        alpha = np.cbrt(np.sqrt(Q) - q / 2.0)
+        beta = np.cbrt(-np.sqrt(Q) - q / 2.0)
+        y = alpha + beta
+
+        # evaluate rho, m
+        rho_new = y - b / 3.0
+        m_new = m * rho_new / (rho_new + _lambda)
+
+        return np.stack((rho_new, m_new))
+
+    def prox_in_dual(
+        self, dual_variables: Tuple[np.ndarray], stepsize: float
+    ) -> Tuple[np.ndarray]:
+        """Prox map of functional i, which is clipping according to constraints; see eq (35)"""
+
+        sigma = stepsize
+
+        dual_variables_new = []
+        for i in range(4):
+            pass
+
+        return None
