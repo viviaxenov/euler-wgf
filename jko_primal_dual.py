@@ -198,6 +198,8 @@ class JKO_step:
             axis=0,
         )
 
+
+
     def prox_in_primal(
         self, primal_variables: np.ndarray, stepsize: float
     ) -> np.ndarray:
@@ -227,6 +229,8 @@ class JKO_step:
         # print(primal_variables[:, Q <= 0])
         # assert np.all(Q > 0)
 
+        Q += 1e-13 # TODO: REMOVE THIS
+
         # find root of the reduced polynomial with explicit Cardano formula
         # wonder if all of them used it too...
         alpha = np.cbrt(np.sqrt(Q) - q / 2.0)
@@ -239,13 +243,14 @@ class JKO_step:
 
         return np.stack((rho_new, m_new))
 
+
+
     def prox_in_dual(
         self, dual_variables: Tuple[np.ndarray], stepsize: float
     ) -> Tuple[np.ndarray]:
         """Prox map of functional i, which is clipping according to constraints; see eq (35)"""
 
         sigma = stepsize
-
         dual_variables_new = []
 
         for i in range(4):
@@ -260,7 +265,10 @@ class JKO_step:
     def energy_gradient(self, primal_variables: np.ndarray) -> np.ndarray:
         rho_1 = primal_variables[0, -1, :]  # density if final moment
         grad = self.U_prime(rho_1) + self.V_cell  # gradient in JKO scheme
-        return grad * 2.0 * self.tau  # here JKO is rescaled as W^2_2 + 2*tau*E
+
+        retval = np.zeros_like(primal_variables)
+        retval[0, -1, :] = grad * 2.0 * self.tau  # here JKO is rescaled as W^2_2 + 2*tau*Ed
+        return retval
 
     def minimize(
         self,
