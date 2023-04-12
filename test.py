@@ -19,7 +19,11 @@ probl = Problem(
 )
 
 primal_variables = probl.get_primal_variables()
+primal_variables[1, :, :] = 0.01
 dual_variables = probl.get_dual_variables()
+
+new_primal = probl.prox_in_primal(primal_variables, 1e-3)
+new_dual = probl.prox_in_dual(dual_variables, 1e-3)
 
 errors = []
 
@@ -34,6 +38,4 @@ for _ in range(1000):
     dot_in_dual= np.sum([Au[i].ravel() @ phi[i].ravel() for i in range(4)])
     errors.append(np.abs(dot_in_primal - dot_in_dual))
 
-errors = np.array(errors)
-
-print(errors.max(), errors.mean())
+print(new_dual)

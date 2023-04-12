@@ -48,7 +48,7 @@ class Problem:
         self.dx = x_edge[1]
         self.dt = self.t[1]
         # cell volume for integration
-        self.cell_vol = self.dx**spatial_dim
+        self.cell_vol = self.dx ** spatial_dim
 
         self.U_prime = internal_energy_derivative_fn
         self.V = potential_energy_fn
@@ -210,18 +210,20 @@ class Problem:
         # these are all element-wise
         b = 2.0 * _lambda - rho
         c = _lambda * (_lambda - 2.0 * rho)
-        d = -_lambda * (m**2 / 2.0 - rho * _lambda)
+        d = -_lambda * (m ** 2 / 2.0 - rho * _lambda)
 
         # define coefs of a reduced polynomial
-        p = c - b**2 / 3.0
-        q = (2 * b**3 - 9 * b * c + 27 * d) / 27.0
+        p = c - b ** 2 / 3.0
+        q = (2 * b ** 3 - 9 * b * c + 27 * d) / 27.0
 
-        assert np.all(Q > 0)
         # TODO maybe we can't rule out the case with Q = 0
         # it's probably the case with |m| = 0=> rho = 0 => new_rho = 0
         # but i'll have to pass the IF 'to C level'
         # maybe there won't be this problem with iterative method
         Q = (p / 3.0) ** 3 + (q / 2.0) ** 2
+        # print(Q[Q<0])
+        # print(primal_variables[:, Q <= 0])
+        assert np.all(Q > 0)
 
         # find root of the reduced polynomial with explicit Cardano formula
         # wonder if all of them used it too...
@@ -243,7 +245,20 @@ class Problem:
         sigma = stepsize
 
         dual_variables_new = []
-        for i in range(4):
-            pass
 
-        return None
+        for i in range(4):
+            phi = dual_variables[i]
+            phi_new = phi - sigma * ball_projection(
+                phi / sigma, self.rhs[i], self.tols[i]
+            )
+            dual_variables_new.append(phi)
+
+        return dual_variables_new
+
+    def minimize(self, steps: Tuple[float], )
+
+
+def ball_projection(x, b, delta):
+    diff = x - b
+    diff_norm = np.linalg.norm(diff)
+    return x if diff_norm <= delta else diff * delta / diff_norm + b
