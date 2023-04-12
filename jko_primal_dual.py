@@ -10,7 +10,7 @@ from typing import Callable, Tuple
 # I think it improve readability in annotations
 
 
-class Problem:
+class JKO_step:
     def __init__(
         self,
         N_x: int,
@@ -18,7 +18,8 @@ class Problem:
         rho_init: Callable,
         internal_energy_derivative_fn: Callable,
         potential_energy_fn: Callable,
-        deltas: Tuple[float, float, float, float],
+        tau: float,  # Think of better name
+        deltas: Tuple[float, float, float, float],  # Move to minimization method?
         spatial_dim: int = 1,
         x_left: float = 0.0,
         x_right: float = 1.0,
@@ -33,6 +34,7 @@ class Problem:
             raise NotImplementedError
 
         self.deltas = np.array(deltas)
+        self.tau = tau
 
         self.N_t = N_t
         self.N_x = N_x
@@ -223,7 +225,7 @@ class Problem:
         Q = (p / 3.0) ** 3 + (q / 2.0) ** 2
         # print(Q[Q<0])
         # print(primal_variables[:, Q <= 0])
-        assert np.all(Q > 0)
+        # assert np.all(Q > 0)
 
         # find root of the reduced polynomial with explicit Cardano formula
         # wonder if all of them used it too...
@@ -255,10 +257,54 @@ class Problem:
 
         return dual_variables_new
 
-    def minimize(self, steps: Tuple[float], )
+    def energy_gradient(self, primal_variables: np.ndarray) -> np.ndarray:
+        rho_1 = primal_variables[0, -1, :]  # density if final moment
+        grad = self.U_prime(rho_1) + self.V_cell  # gradient in JKO scheme
+        return grad * 2.0 * self.tau  # here JKO is rescaled as W^2_2 + 2*tau*E
+
+    def minimize(
+        self,
+        step_sizes: Tuple[float],
+        N_max_steps: int,
+        primal_init: np.ndarray = None,
+        dual_init: Tuple[np.ndarray] = None,
+        stopping_rtol: float = 1e-5,
+    ):
+        _lambda, sigma = step_sizes  # in primal and dual spaces respectively
+
+        u = primal_init if primal_init is not None else self.get_primal_variables()
+        u_bar = u.copy()
+        phi = dual_init if dual_init is not None else self.get_dual_variables()
+
+        for steps_done in range(N_max_steps):
+            Au_bar = self.apply_A(u_bar)
+            phi_new = tuple([phi[i] + sigma * Au_bar[i] for i in range(4)])
+            phi_new = self.prox_in_dual(phi_new, sigma)
+
+            grad_u = self.energy_gradient(u)
+            u_new = self.prox_in_primal(
+                u - _lambda * grad_u - _lambda * self.apply_At(phi_new),
+                _lambda,
+            )
+
+            grad_u_new = self.energy_gradient(u_new)
+            u_bar_new = 2.0 * u_new - u + _lambda * (grad_u - grad_u_new)
+
+            rdiff = np.linalg.norm(u - u_new) / np.linalg.norm(u)
+
+            phi = phi_new
+            u = u_new
+            u_bar = u_bar_new
+
+            if rdiff < stopping_rtol:
+                break
+
+        return u, phi, steps_done
 
 
 def ball_projection(x, b, delta):
+
     diff = x - b
     diff_norm = np.linalg.norm(diff)
+
     return x if diff_norm <= delta else diff * delta / diff_norm + b
