@@ -23,6 +23,7 @@ class JKO_step:
         spatial_dim: int = 1,
         x_left: float = 0.0,
         x_right: float = 1.0,
+        newt_steps=3,
     ):
         # Here timestep is for discretization of  internal cycle's time, i.e. the variable that parametrizes the intermediate Wasserstein geodesic
 
@@ -50,7 +51,7 @@ class JKO_step:
         self.dx = x_edge[1]
         self.dt = self.t[1]
         # cell volume for integration
-        self.cell_vol = self.dx ** spatial_dim
+        self.cell_vol = self.dx**spatial_dim
 
         self.U_prime = internal_energy_derivative_fn
         self.V = potential_energy_fn
@@ -64,6 +65,13 @@ class JKO_step:
         self.rho_0_h = rho_0_h / np.sum(rho_0_h) * self.cell_vol
         self.rhs = [0.0, 0.0, 1.0, self.rho_0_h]
 
+        # number of Newton iterations in the prox evaluation
+        self.newt_steps = newt_steps
+        if newt_steps is None:
+            self.prox_in_primal = self.__prox_in_primal_algebraic
+        else:
+            self.prox_in_primal = self.__prox_in_primal_newton
+        
         # I believe that there could be some inconsistency in the paper
         # So i define these tols for prox evaluation so that the constraints (30-31) hold for delta := self.delta (user-defined)
         # and then delta from definition of prox := self.tols
@@ -85,7 +93,7 @@ class JKO_step:
     def get_primal_variables(self) -> np.ndarray:
 
         rho = np.stack((self.rho_0_h,) * self.N_t)
-        m = np.stack((np.zeros_like(self.rho_0_h),) * self.N_t)
+        m = np.full_like(rho, 1e-3)
 
         return np.stack((rho, m))
 
@@ -198,12 +206,46 @@ class JKO_step:
             axis=0,
         )
 
-
-
-    def prox_in_primal(
+    def __prox_in_primal_newton(
         self, primal_variables: np.ndarray, stepsize: float
     ) -> np.ndarray:
-        """Prox map of functional \Varphi, which involves taking a root of a polynomial; see eq (36)"""
+        """
+        Prox map of functional \Varphi, which involves taking a root of a polynomial; see eq (36)
+        Evaluate with Newton method w. same amount of iterations for each rho
+        """
+        rho = primal_variables[0, :, :]
+        m = primal_variables[1, :, :]
+        lam = stepsize
+        m_sq = np.where(rho > 0.0, m**2, 0.0)
+
+        rholam = (rho + lam) / np.sqrt(3)
+        shift = 0.5*m_sq*lam
+        drho = np.cbrt(shift + rholam**3) - rholam
+        rho_upper_bound = rho + drho
+        rho_prox = rho_upper_bound
+
+        for _ in range(self.newt_steps):
+            rho_prox -= prox_polynom(rho_prox, lam, rho, m_sq) / prox_polynom_deriv(
+                rho_prox, lam, rho, m_sq
+            )
+
+        assert np.all(rho_prox > rho)
+        m_prox = m * rho_prox / (rho_prox + lam)
+
+        return np.stack((rho_prox, m_prox))
+
+    def __prox_in_primal_algebraic(
+        self, primal_variables: np.ndarray, stepsize: float
+    ) -> np.ndarray:
+        """
+        Prox map of functional \Varphi, which involves taking a root of a polynomial; see eq (36)
+        Solution with Cardano formula; didn't work, maybe fix it later
+        """
+
+        rho = primal_variables[0, :, :]
+        m = primal_variables[1, :, :]
+
+        _lambda = stepsize
 
         rho = primal_variables[0, :, :]
         m = primal_variables[1, :, :]
@@ -214,11 +256,11 @@ class JKO_step:
         # these are all element-wise
         b = 2.0 * _lambda - rho
         c = _lambda * (_lambda - 2.0 * rho)
-        d = -_lambda * (m ** 2 / 2.0 - rho * _lambda)
+        d = -_lambda * (m**2 / 2.0 - rho * _lambda)
 
         # define coefs of a reduced polynomial
-        p = c - b ** 2 / 3.0
-        q = (2 * b ** 3 - 9 * b * c + 27 * d) / 27.0
+        p = c - b**2 / 3.0
+        q = (2 * b**3 - 9 * b * c + 27 * d) / 27.0
 
         # TODO maybe we can't rule out the case with Q = 0
         # it's probably the case with |m| = 0=> rho = 0 => new_rho = 0
@@ -229,7 +271,7 @@ class JKO_step:
         # print(primal_variables[:, Q <= 0])
         # assert np.all(Q > 0)
 
-        Q += 1e-13 # TODO: REMOVE THIS
+        Q += 1e-13  # TODO: REMOVE THIS
 
         # find root of the reduced polynomial with explicit Cardano formula
         # wonder if all of them used it too...
@@ -242,8 +284,6 @@ class JKO_step:
         m_new = m * rho_new / (rho_new + _lambda)
 
         return np.stack((rho_new, m_new))
-
-
 
     def prox_in_dual(
         self, dual_variables: Tuple[np.ndarray], stepsize: float
@@ -267,7 +307,9 @@ class JKO_step:
         grad = self.U_prime(rho_1) + self.V_cell  # gradient in JKO scheme
 
         retval = np.zeros_like(primal_variables)
-        retval[0, -1, :] = grad * 2.0 * self.tau  # here JKO is rescaled as W^2_2 + 2*tau*Ed
+        retval[0, -1, :] = (
+            grad * 2.0 * self.tau
+        )  # here JKO is rescaled as W^2_2 + 2*tau*Ed
         return retval
 
     def minimize(
@@ -307,12 +349,19 @@ class JKO_step:
             if rdiff < stopping_rtol:
                 break
 
-        return u, phi, steps_done
+        return u, phi, steps_done + 1
 
 
 def ball_projection(x, b, delta):
-
     diff = x - b
     diff_norm = np.linalg.norm(diff)
 
     return x if diff_norm <= delta else diff * delta / diff_norm + b
+
+
+prox_polynom = (
+    lambda _x, _lam, _rho, _m_sq: (_x + _lam) ** 2 * (_x - _rho) - 0.5 * _lam * _m_sq
+)
+prox_polynom_deriv = (
+    lambda _x, _lam, _rho, _m_sq: 3.0 * (_x + _lam) * (_x - (2 * _rho - _lam) / 3.0)
+)
