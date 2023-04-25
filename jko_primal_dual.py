@@ -1,11 +1,9 @@
 # 1-d toy implememtation of methods from paper
 # <<Primal-dual methods for Wasserstein gradient flows>> Carillo et al. 2021
-
 import numpy as np
 
-# from scipy.sparse.linalg import LinearOperator
-
 from typing import Callable, Tuple
+import traceback
 
 # I think it improve readability in annotations
 
@@ -24,6 +22,7 @@ class JKO_step:
         x_left: float = 0.0,
         x_right: float = 1.0,
         newt_steps=3,
+        debug=False,
     ):
         # Here timestep is for discretization of  internal cycle's time, i.e. the variable that parametrizes the intermediate Wasserstein geodesic
 
@@ -48,7 +47,7 @@ class JKO_step:
         self.t = np.linspace(0.0, 1.0, N_t + 1, endpoint=True)
 
         # respective cell sizes for the regular grid
-        self.dx = x_edge[1]
+        self.dx = x_edge[1] - x_edge[0]
         self.dt = self.t[1]
         # cell volume for integration
         self.cell_vol = self.dx**spatial_dim
@@ -62,7 +61,7 @@ class JKO_step:
         # Initial density for I.C. constraint check
         rho_0_h = rho_init(self.x_cell)
         # normalize so that integral of discretized rho is equal to 1
-        self.rho_0_h = rho_0_h / np.sum(rho_0_h) * self.cell_vol
+        self.rho_0_h = rho_0_h / np.sum(rho_0_h) / self.cell_vol
         self.rhs = [0.0, 0.0, 1.0, self.rho_0_h]
 
         # number of Newton iterations in the prox evaluation
@@ -71,36 +70,44 @@ class JKO_step:
             self.prox_in_primal = self.__prox_in_primal_algebraic
         else:
             self.prox_in_primal = self.__prox_in_primal_newton
-        
+
+        if debug:
+            print(
+                "Using debug mode: catching RuntimeErrors as exceptions and providing [a lot of] dumps."
+            )
+            np.seterr(all="raise")
+            self.minimize = self.__minimize_debug
+
+        else:
+            self.minimize = self.__minimize_clean
+
         # I believe that there could be some inconsistency in the paper
         # So i define these tols for prox evaluation so that the constraints (30-31) hold for delta := self.delta (user-defined)
         # and then delta from definition of prox := self.tols
-        self.tols = (
-            self.deltas
-            / (
-                np.array(
-                    [
-                        self.cell_vol * self.dt,
-                        self.dx * self.dt,
-                        1.0,
-                        self.cell_vol,
-                    ]
-                )
+        self.tols = self.deltas / (
+            np.array(
+                [
+                    self.cell_vol * self.dt,
+                    self.dx * self.dt,
+                    self.dt,
+                    self.cell_vol,
+                ]
             )
             ** 0.5
         )
 
     def get_primal_variables(self) -> np.ndarray:
 
-        rho = np.stack((self.rho_0_h,) * self.N_t)
-        m = np.full_like(rho, 1e-3)
+        rho = np.zeros((self.N_t, self.N_x))
+        rho[:, :] = self.rho_0_h
+        m = np.full_like(rho, 0.0)
 
         return np.stack((rho, m))
 
-    def get_dual_variables(self) -> Tuple[np.ndarray]:
+    def get_dual_variables(self, fill_value=0.0) -> Tuple[np.ndarray]:
         # it's stupid but I'll rewrite it later
         Au = self.apply_A(self.get_primal_variables())
-        duals = [np.zeros_like(_x) for _x in Au]
+        duals = [np.full_like(_x, fill_value) for _x in Au]
 
         return tuple(duals)
 
@@ -151,7 +158,7 @@ class JKO_step:
 
         # TODO would multiply by cell face area (would be different from dx in general);
         # maybe need to think/read more about this from the perspective of Finite Volume methods
-        return m[:-1, [0, -1]] * self.dx * self.dt
+        return m[:-1, [0, -1]]
 
     def apply_At_boundary_condition(self, phi: np.ndarray) -> np.ndarray:
         # phi = dual_variables[1]
@@ -167,23 +174,20 @@ class JKO_step:
         # in the paper it's *(dx)^(d)*dt but i think it's better to rescale delta at prox step
         # ! need to be careful with the scaling of dual variables !
 
-        return rho.sum(axis=1)
+        return rho.sum(axis=1) * self.cell_vol
 
     def apply_At_mass(self, phi: np.ndarray) -> np.ndarray:
         m = np.zeros((self.N_t, self.N_x))
         rho = np.broadcast_to(np.atleast_2d(phi).T, m.shape)
-        return np.stack((rho, m))
+        return np.stack((rho, m)) * self.cell_vol
 
     def apply_A_initial_condition(self, primal_variables) -> np.ndarray:
-
-        rho = primal_variables[0, :, :]
-        return rho[0, :]
+        return primal_variables[0, 0, :]
 
     def apply_At_initial_condition(self, phi: np.ndarray) -> np.ndarray:
-        m = np.zeros((self.N_t, self.N_x))
-        rho = m.copy()
-        rho[0, :] = phi
-        return np.stack((rho, m))
+        pv = np.zeros((2, self.N_t, self.N_x))
+        pv[0, 0, :] = phi
+        return pv
 
     def apply_A(self, primal_variables: np.ndarray) -> Tuple[np.ndarray]:
         return (
@@ -216,10 +220,10 @@ class JKO_step:
         rho = primal_variables[0, :, :]
         m = primal_variables[1, :, :]
         lam = stepsize
-        m_sq = np.where(rho > 0.0, m**2, 0.0)
+        m_sq = m**2
 
         rholam = (rho + lam) / np.sqrt(3)
-        shift = 0.5*m_sq*lam
+        shift = 0.5 * m_sq * lam
         drho = np.cbrt(shift + rholam**3) - rholam
         rho_upper_bound = rho + drho
         rho_prox = rho_upper_bound
@@ -229,7 +233,17 @@ class JKO_step:
                 rho_prox, lam, rho, m_sq
             )
 
-        assert np.all(rho_prox > rho)
+        if np.any(rho_prox < rho):
+            print(rho, m, lam)
+            print(((rho - rho_prox)).max())
+            raise RuntimeWarning("rho_prox < rho!")
+
+        # rho_reference = np.zeros((self.N_t, self.N_x))
+
+        # for _i in range(self.N_t):
+        #     for _j in range(self.N_x):
+        #         rho_reference[_i, _j] = fsolve(lambda _x: (_x - rho[_i, _j])*(_x + lam)**2 -0.5*m_sq[_i, _j]*lam, rho_upper_bound)[0]
+
         m_prox = m * rho_prox / (rho_prox + lam)
 
         return np.stack((rho_prox, m_prox))
@@ -241,6 +255,7 @@ class JKO_step:
         Prox map of functional \Varphi, which involves taking a root of a polynomial; see eq (36)
         Solution with Cardano formula; didn't work, maybe fix it later
         """
+        raise (NotImplementedError)
 
         rho = primal_variables[0, :, :]
         m = primal_variables[1, :, :]
@@ -293,17 +308,16 @@ class JKO_step:
         sigma = stepsize
         dual_variables_new = []
 
-        for i in range(4):
-            phi = dual_variables[i]
+        for _i in range(4):
+            phi = dual_variables[_i]
             phi_new = phi - sigma * ball_projection(
-                phi / sigma, self.rhs[i], self.tols[i]
+                phi / sigma, self.rhs[_i], self.tols[_i]
             )
-            dual_variables_new.append(phi)
-
-        return dual_variables_new
+            dual_variables_new.append(phi_new)
+        return tuple(dual_variables_new)
 
     def energy_gradient(self, primal_variables: np.ndarray) -> np.ndarray:
-        rho_1 = primal_variables[0, -1, :]  # density if final moment
+        rho_1 = primal_variables[0, -1, :]  # density in final moment
         grad = self.U_prime(rho_1) + self.V_cell  # gradient in JKO scheme
 
         retval = np.zeros_like(primal_variables)
@@ -312,26 +326,26 @@ class JKO_step:
         )  # here JKO is rescaled as W^2_2 + 2*tau*Ed
         return retval
 
-    def minimize(
+    def __minimize_clean(
         self,
         step_sizes: Tuple[float],
         N_max_steps: int,
         primal_init: np.ndarray = None,
         dual_init: Tuple[np.ndarray] = None,
-        stopping_rtol: float = 1e-5,
+        stopping_rtol: float = 1e-10,
     ):
         _lambda, sigma = step_sizes  # in primal and dual spaces respectively
 
         u = primal_init if primal_init is not None else self.get_primal_variables()
         u_bar = u.copy()
         phi = dual_init if dual_init is not None else self.get_dual_variables()
+        grad_u = self.energy_gradient(u)
 
         for steps_done in range(N_max_steps):
             Au_bar = self.apply_A(u_bar)
             phi_new = tuple([phi[i] + sigma * Au_bar[i] for i in range(4)])
             phi_new = self.prox_in_dual(phi_new, sigma)
 
-            grad_u = self.energy_gradient(u)
             u_new = self.prox_in_primal(
                 u - _lambda * grad_u - _lambda * self.apply_At(phi_new),
                 _lambda,
@@ -345,18 +359,130 @@ class JKO_step:
             phi = phi_new
             u = u_new
             u_bar = u_bar_new
+            grad_u = grad_u_new
 
             if rdiff < stopping_rtol:
                 break
 
         return u, phi, steps_done + 1
 
+    def __minimize_debug(
+        self,
+        step_sizes: Tuple[float],
+        N_max_steps: int,
+        primal_init: np.ndarray = None,
+        dual_init: Tuple[np.ndarray] = None,
+        stopping_rtol: float = 1e-10,
+    ):
+        _lambda, sigma = step_sizes  # in primal and dual spaces respectively
 
-def ball_projection(x, b, delta):
-    diff = x - b
-    diff_norm = np.linalg.norm(diff)
+        u = primal_init if primal_init is not None else self.get_primal_variables()
+        u_bar = u.copy()
+        phi = dual_init if dual_init is not None else self.get_dual_variables()
+        grad_u = self.energy_gradient(u)
 
-    return x if diff_norm <= delta else diff * delta / diff_norm + b
+        history = {
+            "violation_pde": [],
+            "violation_bc": [],
+            "violation_mass": [],
+            "violation_ic": [],
+            "objective": [],
+            "rdiff_primal": [],
+            "W": [],
+            "F": [],
+            "pv": [],
+        }
+
+        for steps_done in range(N_max_steps):
+            try:
+                Au_bar = self.apply_A(u_bar)
+                phi_new = tuple([phi[i] + sigma * Au_bar[i] for i in range(4)])
+                phi_new = self.prox_in_dual(phi_new, sigma)
+
+                u_new = self.prox_in_primal(
+                    u - _lambda * grad_u - _lambda * self.apply_At(phi_new),
+                    _lambda,
+                )
+
+                grad_u_new = self.energy_gradient(u_new)
+                u_bar_new = 2.0 * u_new - u + _lambda * (grad_u - grad_u_new)
+
+                rdiff = np.linalg.norm(u - u_new) / np.linalg.norm(u)
+
+                rho1 = u[0, -1, :]
+                F = (self.V_cell + np.log(rho1)) @ rho1 * self.cell_vol
+                Wass = (
+                    np.where(u[0, :, :] > 0, u[1, ::] ** 2 / u[0, :, :], 0.0).sum()
+                    * self.cell_vol
+                    * self.dt
+                )
+                objective = 2.0 * self.tau * F + Wass
+
+                pde_violation = (
+                    np.linalg.norm(self.apply_A_pde(u) - self.rhs[0])
+                    * self.cell_vol
+                    * self.dt
+                )
+                bc_violation = (
+                    np.linalg.norm(self.apply_A_boundary_condition(u) - self.rhs[1])
+                    * self.dx
+                    * self.dt
+                )
+
+                # print(self.apply_A_mass(u))
+
+                mass_violation = (
+                    np.linalg.norm(self.apply_A_mass(u) - self.rhs[2]) * self.dt
+                )
+                ic_violation = (
+                    np.linalg.norm(self.apply_A_initial_condition(u) - self.rhs[3])
+                    * self.dx
+                )
+
+                history["pv"].append(u)
+                history["objective"].append(objective)
+                history["W"].append(Wass)
+                history["F"].append(F)
+                history["violation_mass"].append(mass_violation)
+                history["violation_pde"].append(pde_violation)
+                history["violation_bc"].append(bc_violation)
+                history["violation_ic"].append(ic_violation)
+                history["rdiff_primal"].append(rdiff)
+
+                phi = phi_new
+                u = u_new
+                u_bar = u_bar_new
+                grad_u = grad_u_new
+
+                if rdiff < stopping_rtol:
+                    break
+
+            except (RuntimeError, FloatingPointError) as e:
+                print(f"{steps_done=}")
+                print(''.join(traceback.TracebackException.from_exception(e).format()))
+                break
+
+        return u, phi, history
+
+    def estimate_step_sizes(
+        self, beta_guess: float, n_power_iter: int = 100
+    ) -> Tuple[float]:
+
+        # estimate norm of B=AA^t with power iteraton
+        phi = self.get_dual_variables(0.01)
+        for _ in range(n_power_iter):
+            Bphi = self.apply_A((self.apply_At(phi)))
+            norm_Bphi = np.sqrt(dot_in_dual(Bphi, Bphi))
+            phi = tuple((_phi / norm_Bphi) for _phi in Bphi)
+
+        oper_norm = dot_in_dual(phi, self.apply_A(self.apply_At(phi))) / dot_in_dual(
+            phi, phi
+        )
+
+        lam = beta_guess / self.tau
+        sigma = 1.0 / oper_norm / lam
+
+        return lam, sigma
 
 
 prox_polynom = (
@@ -365,3 +491,24 @@ prox_polynom = (
 prox_polynom_deriv = (
     lambda _x, _lam, _rho, _m_sq: 3.0 * (_x + _lam) * (_x - (2 * _rho - _lam) / 3.0)
 )
+
+
+def dot_in_dual(dv1: Tuple[np.ndarray], dv2: Tuple[np.ndarray]) -> float:
+    dot = 0.0
+    for _i in range(4):
+        dot += dv1[_i].ravel() @ dv2[_i].ravel()
+    return dot
+
+
+def ball_projection(x: np.ndarray, b: np.ndarray, delta: float) -> np.ndarray:
+    diff = x - b
+    diff_norm = np.linalg.norm(diff)
+
+    return x if diff_norm <= delta else diff * delta / diff_norm + b
+
+
+def dot_in_dual(dv1: Tuple[np.ndarray], dv2: Tuple[np.ndarray]) -> float:
+    dot = 0.0
+    for _i in range(4):
+        dot += dv1[_i].ravel() @ dv2[_i].ravel()
+    return dot
