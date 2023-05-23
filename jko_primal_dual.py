@@ -2,6 +2,8 @@
 # <<Primal-dual methods for Wasserstein gradient flows>> Carillo et al. 2021
 import numpy as np
 
+from scipy.optimize import fsolve
+
 from typing import Callable, Tuple
 import traceback
 
@@ -104,7 +106,7 @@ class JKO_step:
 
         return np.stack((rho, m))
 
-    def get_dual_variables(self, fill_value=0.0) -> Tuple[np.ndarray]:
+    def get_dual_variables(self, fill_value=1.0) -> Tuple[np.ndarray]:
         # it's stupid but I'll rewrite it later
         Au = self.apply_A(self.get_primal_variables())
         duals = [np.full_like(_x, fill_value) for _x in Au]
@@ -225,6 +227,8 @@ class JKO_step:
         rholam = (rho + lam) / np.sqrt(3)
         shift = 0.5 * m_sq * lam
         drho = np.cbrt(shift + rholam**3) - rholam
+        drho = np.maximum(drho, 0.0)
+
         rho_upper_bound = rho + drho
         rho_prox = rho_upper_bound
 
@@ -233,17 +237,34 @@ class JKO_step:
                 rho_prox, lam, rho, m_sq
             )
 
-        if np.any(rho_prox < rho):
-            print(rho, m, lam)
-            print(((rho - rho_prox)).max())
-            raise RuntimeWarning("rho_prox < rho!")
-
+        # # check if Newton's method converges (to the same thing as reference root finder from numpy)
         # rho_reference = np.zeros((self.N_t, self.N_x))
-
         # for _i in range(self.N_t):
         #     for _j in range(self.N_x):
         #         rho_reference[_i, _j] = fsolve(lambda _x: (_x - rho[_i, _j])*(_x + lam)**2 -0.5*m_sq[_i, _j]*lam, rho_upper_bound)[0]
 
+        # root_err = np.abs(rho_prox - rho_reference)/(rho + 1e-32)
+
+        assert np.all(rho + lam >= 0.0)
+
+        errmsg = ""
+        # check that the upper bound is actuallty upper bound
+        if np.any(drho < 0.0):
+            print(f"{drho=}")
+            print(f"{rho=}")
+            errmsg += "rho_upper_bound < rho!;"
+
+        # if np.any(root_err >= 1e-8):
+        #     print(f"{root_err=}")
+        #     errmsg += "root incorrect!; "
+
+        if np.any(rho_prox < rho):
+            print("{((rho - rho_prox)).max()=}")
+            errmsg += "rho_prox < rho"
+
+        if len(errmsg) > 0:
+            raise RuntimeWarning(errmsg)
+        rho_prox = np.maximum(rho_prox, 0.0)
         m_prox = m * rho_prox / (rho_prox + lam)
 
         return np.stack((rho_prox, m_prox))
@@ -332,7 +353,7 @@ class JKO_step:
         N_max_steps: int,
         primal_init: np.ndarray = None,
         dual_init: Tuple[np.ndarray] = None,
-        stopping_rtol: float = 1e-10,
+        stopping_rtol: float = 1e-6,
     ):
         _lambda, sigma = step_sizes  # in primal and dual spaces respectively
 
@@ -372,7 +393,7 @@ class JKO_step:
         N_max_steps: int,
         primal_init: np.ndarray = None,
         dual_init: Tuple[np.ndarray] = None,
-        stopping_rtol: float = 1e-10,
+        stopping_rtol: float = 1e-6,
     ):
         _lambda, sigma = step_sizes  # in primal and dual spaces respectively
 
@@ -459,7 +480,7 @@ class JKO_step:
 
             except (RuntimeError, FloatingPointError) as e:
                 print(f"{steps_done=}")
-                print(''.join(traceback.TracebackException.from_exception(e).format()))
+                print("".join(traceback.TracebackException.from_exception(e).format()))
                 break
 
         return u, phi, history

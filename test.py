@@ -10,13 +10,14 @@ from jko_primal_dual import *
 
 # np.seterr(all="raise")
 
-N_x = 100
+N_x = 20
 N_t = 10
 delta = 1e-5
 #
 # for demonstration we do WGF between 2 [clipped]  Gaussians
 m_init = 1.0 / 2
-m_fin = 1.0 / 6.0
+# m_fin = 1.0 / 6.0
+m_fin = m_init
 
 sigma_init = 1.0
 sigma_fin = 0.2
@@ -39,7 +40,7 @@ jko_step = JKO_step(
     N_t,
     lambda _x: np.exp(-(((_x - m_init) / sigma_init) ** 2) / 2.0),
     lambda _x: np.log(_x) + 1.0,
-    lambda _x: 0.5 * ((_x - m_fin) / sigma_fin) ** 2 + 1.,
+    lambda _x: 0.5 *((_x - m_fin) / sigma_fin) ** 2,
     tau,
     deltas=(delta,) * 4,
     debug=True,
@@ -69,7 +70,7 @@ errors = np.array(errors)
 print(errors.max())
 
 N_steps = 200_000
-stepsizes = jko_step.estimate_step_sizes(1e-8)
+stepsizes = jko_step.estimate_step_sizes(1e-5)
 print(stepsizes)
 # main optimization loop
 t = perf_counter()
