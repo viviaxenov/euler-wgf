@@ -26,10 +26,10 @@ tau = 0.01
 # for gaussians we can get analytical solution
 # this is actially a wrong solution because our Gaussians are clipped
 # but maybe will work for large X
-m_tau = (m_init / tau + m_fin / sigma_fin**2) / (1 / tau + 1 / sigma_fin**2)
+m_tau = (m_init / tau + m_fin / sigma_fin ** 2) / (1 / tau + 1 / sigma_fin ** 2)
 sigma_tau = (
-    (sigma_init + np.sqrt(sigma_init**2 + 4.0 * (tau + tau**2 / sigma_fin**2)))
-    / (1 + tau / sigma_fin**2)
+    (sigma_init + np.sqrt(sigma_init ** 2 + 4.0 * (tau + tau ** 2 / sigma_fin ** 2)))
+    / (1 + tau / sigma_fin ** 2)
     / 2.0
 )
 density_one_step = lambda _x: np.exp(-(((_x - m_tau) / sigma_tau) ** 2) / 2.0)
@@ -39,13 +39,12 @@ jko_step = JKO_step(
     N_t,
     lambda _x: np.exp(-(((_x - m_init) / sigma_init) ** 2) / 2.0),
     lambda _x: np.log(_x) + 1.0,
-    lambda _x: 0.5 * ((_x - m_fin) / sigma_fin) ** 2 + 1.,
+    lambda _x: 0.5 * ((_x - m_fin) / sigma_fin) ** 2,
     tau,
     deltas=(delta,) * 4,
     debug=True,
     newt_steps=3,
 )
-
 
 rho_tau = density_one_step(jko_step.x_cell)
 rho_tau = rho_tau / rho_tau.sum() / jko_step.cell_vol
@@ -69,7 +68,7 @@ errors = np.array(errors)
 print(errors.max())
 
 N_steps = 200_000
-stepsizes = jko_step.estimate_step_sizes(1e-8)
+stepsizes = jko_step.estimate_step_sizes(1e-4)
 print(stepsizes)
 # main optimization loop
 t = perf_counter()
@@ -161,7 +160,8 @@ for key in history.keys():
 
 axs[0].axhline(delta, linestyle="--")
 
-for key in ["F", "W", "objective"]:
+
+for key in ["F", "W", "objective", 'rdiff_primal']:
     axs[1].plot(history[key][20:], label=key)
 
 axs[0].set_yscale("log")

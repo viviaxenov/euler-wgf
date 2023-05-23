@@ -50,7 +50,7 @@ class JKO_step:
         self.dx = x_edge[1] - x_edge[0]
         self.dt = self.t[1]
         # cell volume for integration
-        self.cell_vol = self.dx**spatial_dim
+        self.cell_vol = self.dx ** spatial_dim
 
         self.U_prime = internal_energy_derivative_fn
         self.V = potential_energy_fn
@@ -87,7 +87,7 @@ class JKO_step:
         self.tols = self.deltas / (
             np.array(
                 [
-                    self.cell_vol * self.dt,
+                    1.,
                     self.dx * self.dt,
                     self.dt,
                     self.cell_vol,
@@ -117,40 +117,36 @@ class JKO_step:
 
         u = primal_variables
         rho = u[0, :, :]
-        m = u[1, :, :]
+        # default behaviour is to pad w. zeros
+        m = np.pad(
+            u[1, :, :],
+            ((0, 0), (1, 1)),
+        )
 
         # use centered difference for d/dx for now, maybe use C.N. later
         # TODO maybe we should make an array of cell vols? for grid with cells of diff.size (but same vol)?
-        Au = (rho[1:, 1:-1] - rho[:-1, 1:-1]) / self.dt + (
-            m[:-1, 2:] - m[:-1, :-2]
+        Au = (rho[1:, :] - rho[:-1, :]) / self.dt + (
+            m[:-1, :-2] - m[:-1, 2:]
         ) / self.dx / 2.0
 
-        return Au
+        return Au*np.sqrt(self.cell_vol*self.dt)
 
     def apply_At_pde(self, phi: np.ndarray) -> np.ndarray:
         """
         apply the ADJOINT operator to the one that evaluates PDE constraint residual
         phi = dual_variables[0]
         """
-        rho = -phi[1:, :] + phi[:-1, :]
-        rho = np.vstack(
-            (
-                -phi[0, :],
-                rho,
-                phi[-1:, :],
-            )
+        phi_t_pad = np.pad(phi, ((1,1), (0,0)))
+
+        rho = (-phi_t_pad[1:,:] + phi_t_pad[:-1, :])/self.dt
+
+        phi_x_pad = np.pad(
+            phi,
+            ((0, 1), (1, 1)),
         )
+        m = (-phi_x_pad[:, :-2] + phi_x_pad[:, 2:])/2./self.dx
 
-        zero_pad = np.zeros((self.N_t, 1))
-
-        rho = np.hstack((zero_pad, rho, zero_pad)) / self.dt
-
-        m = phi[:, :-2] - phi[:, 2:]
-        m = np.hstack((-phi[:, :2], m, phi[:, -2:]))
-        zero_pad = np.zeros((1, self.N_x))
-        m = np.vstack((m, zero_pad)) / 2.0 / self.dx
-
-        return np.stack((rho, m))
+        return np.stack((rho, m))*np.sqrt(self.cell_vol*self.dt)
 
     def apply_A_boundary_condition(self, primal_variables: np.ndarray):
         """m at boundary should be approx. 0"""
@@ -190,6 +186,7 @@ class JKO_step:
         return pv
 
     def apply_A(self, primal_variables: np.ndarray) -> Tuple[np.ndarray]:
+        # TODO: make the set of costraints with variable len?
         return (
             self.apply_A_pde(primal_variables),
             self.apply_A_boundary_condition(primal_variables),
@@ -220,11 +217,11 @@ class JKO_step:
         rho = primal_variables[0, :, :]
         m = primal_variables[1, :, :]
         lam = stepsize
-        m_sq = m**2
+        m_sq = m ** 2
 
         rholam = (rho + lam) / np.sqrt(3)
         shift = 0.5 * m_sq * lam
-        drho = np.cbrt(shift + rholam**3) - rholam
+        drho = np.cbrt(shift + rholam ** 3) - rholam
         rho_upper_bound = rho + drho
         rho_prox = rho_upper_bound
 
@@ -271,11 +268,11 @@ class JKO_step:
         # these are all element-wise
         b = 2.0 * _lambda - rho
         c = _lambda * (_lambda - 2.0 * rho)
-        d = -_lambda * (m**2 / 2.0 - rho * _lambda)
+        d = -_lambda * (m ** 2 / 2.0 - rho * _lambda)
 
         # define coefs of a reduced polynomial
-        p = c - b**2 / 3.0
-        q = (2 * b**3 - 9 * b * c + 27 * d) / 27.0
+        p = c - b ** 2 / 3.0
+        q = (2 * b ** 3 - 9 * b * c + 27 * d) / 27.0
 
         # TODO maybe we can't rule out the case with Q = 0
         # it's probably the case with |m| = 0=> rho = 0 => new_rho = 0
@@ -372,7 +369,7 @@ class JKO_step:
         N_max_steps: int,
         primal_init: np.ndarray = None,
         dual_init: Tuple[np.ndarray] = None,
-        stopping_rtol: float = 1e-10,
+        stopping_rtol: float = 1e-5,
     ):
         _lambda, sigma = step_sizes  # in primal and dual spaces respectively
 
@@ -410,9 +407,9 @@ class JKO_step:
                 rdiff = np.linalg.norm(u - u_new) / np.linalg.norm(u)
 
                 rho1 = u[0, -1, :]
-                F = (self.V_cell + np.log(rho1)) @ rho1 * self.cell_vol
+                F = 0. # TODO: need to pass this!!!
                 Wass = (
-                    np.where(u[0, :, :] > 0, u[1, ::] ** 2 / u[0, :, :], 0.0).sum()
+                    np.where(u[0, :, :] > 0., u[1, :, :] ** 2 / u[0, :, :], 0.0).sum()
                     * self.cell_vol
                     * self.dt
                 )
@@ -459,7 +456,7 @@ class JKO_step:
 
             except (RuntimeError, FloatingPointError) as e:
                 print(f"{steps_done=}")
-                print(''.join(traceback.TracebackException.from_exception(e).format()))
+                print("".join(traceback.TracebackException.from_exception(e).format()))
                 break
 
         return u, phi, history
@@ -478,6 +475,7 @@ class JKO_step:
         oper_norm = dot_in_dual(phi, self.apply_A(self.apply_At(phi))) / dot_in_dual(
             phi, phi
         )
+        print(oper_norm)
 
         lam = beta_guess / self.tau
         sigma = 1.0 / oper_norm / lam
