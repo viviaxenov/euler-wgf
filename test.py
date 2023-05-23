@@ -40,7 +40,7 @@ jko_step = JKO_step(
     N_t,
     lambda _x: np.exp(-(((_x - m_init) / sigma_init) ** 2) / 2.0),
     lambda _x: np.log(_x) + 1.0,
-    lambda _x: 0.5 *((_x - m_fin) / sigma_fin) ** 2,
+    lambda _x: 0.5 * ((_x - m_fin) / sigma_fin) ** 2,
     tau,
     deltas=(delta,) * 4,
     debug=True,
