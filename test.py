@@ -10,7 +10,7 @@ from jko_primal_dual import *
 
 # np.seterr(all="raise")
 
-N_x = 20
+N_x = 100
 N_t = 10
 delta = 1e-5
 #
@@ -27,22 +27,33 @@ tau = 0.01
 # for gaussians we can get analytical solution
 # this is actially a wrong solution because our Gaussians are clipped
 # but maybe will work for large X
+density_gauss = lambda _x, _m, _sigma: np.exp(-(((_x - _m) / _sigma) ** 2) / 2.0)
+
+
 m_tau = (m_init / tau + m_fin / sigma_fin**2) / (1 / tau + 1 / sigma_fin**2)
 sigma_tau = (
     (sigma_init + np.sqrt(sigma_init**2 + 4.0 * (tau + tau**2 / sigma_fin**2)))
     / (1 + tau / sigma_fin**2)
     / 2.0
 )
-density_one_step = lambda _x: np.exp(-(((_x - m_tau) / sigma_tau) ** 2) / 2.0)
+
+density_prior = lambda _x: density_gauss(_x, m_init, sigma_init)
+density_one_step = lambda _x: density_gauss(_x, m_tau, sigma_tau)
+density_posterior = lambda _x: density_gauss(_x, m_fin, sigma_fin)
 
 jko_step = JKO_step(
     N_x,
     N_t,
-    lambda _x: np.exp(-(((_x - m_init) / sigma_init) ** 2) / 2.0),
+    density_prior,
     lambda _x: np.log(_x) + 1.0,
     lambda _x: 0.5 * ((_x - m_fin) / sigma_fin) ** 2,
     tau,
-    deltas=(delta,) * 4,
+    deltas=(
+        delta,
+        0.,
+        delta,
+        delta,
+    ),
     debug=True,
     newt_steps=3,
 )
@@ -51,11 +62,14 @@ jko_step = JKO_step(
 rho_tau = density_one_step(jko_step.x_cell)
 rho_tau = rho_tau / rho_tau.sum() / jko_step.cell_vol
 
+rho_posterior_h = density_posterior(jko_step.x_cell)
+rho_posterior_h = rho_posterior_h / rho_posterior_h.sum() / jko_step.cell_vol
+
 primal_variables = jko_step.get_primal_variables()
 dual_variables = jko_step.get_dual_variables()
 
 # test if adjoint operator really works
-errors = []
+adjoint_errors = []
 for _ in range(1000):
     u = normal(size=primal_variables.shape)
     phi = tuple(normal(size=_phi.shape) for _phi in dual_variables)
@@ -65,13 +79,15 @@ for _ in range(1000):
 
     dot_in_primal = u.ravel() @ At_phi.ravel()
     dot_in_dual = np.sum([Au[i].ravel() @ phi[i].ravel() for i in range(4)])
-    errors.append(np.abs(dot_in_primal - dot_in_dual))
-errors = np.array(errors)
-print(errors.max())
+    adjoint_errors.append(np.abs(dot_in_primal - dot_in_dual))
+adjoint_errors = np.array(adjoint_errors)
+print(f"{adjoint_errors.max()=:.2e}")
 
-N_steps = 200_000
-stepsizes = jko_step.estimate_step_sizes(1e-5)
-print(stepsizes)
+N_steps = 20_000
+optimal_stepsizes = jko_step.estimate_step_sizes(1e-5)
+print(f"{optimal_stepsizes=}")
+stepsizes = (1e-2, 1e1)
+print(f"{stepsizes=}")
 # main optimization loop
 t = perf_counter()
 pv, dv, history = jko_step.minimize(
@@ -96,26 +112,33 @@ axs[0].plot(
 axs[0].plot(
     jko_step.x_cell, rho_tau, label="Reference solution", color="C2", linestyle="--"
 )
+# axs[0].plot(
+#     jko_step.x_cell, rho_posterior_h, label="Posterior", color="C4", linestyle="--"
+# )
 (l_rho1,) = axs[0].plot(jko_step.x_cell, pv[0, 0, :], label="$\\rho_{t=0}$", color="C1")
 (l_rho2,) = axs[0].plot(
     jko_step.x_cell, pv[0, -1, :], label="$\\rho_{t=1}$", color="C2"
 )
-axs[0].plot(
-    jko_step.x_cell[::2],
-    pv[0, -1, ::2],
-    label="$\\rho_{t=1}, even$",
-    linestyle=None,
-    marker="*",
-    color="C0",
-)
-axs[0].plot(
-    jko_step.x_cell[1::2],
-    pv[0, -1, 1::2],
-    label="$\\rho_{t=1}, odd$",
-    linestyle=None,
-    marker="+",
-    color="C0",
-)
+# axs[0].plot(
+#     jko_step.x_cell[::2],
+#     pv[0, -1, ::2],
+#     label="$\\rho_{t=1}, even$",
+#     linestyle=None,
+#     marker="*",
+#     markersize=1.5,
+#     color="C0",
+#     linewidth=.3,
+# )
+# axs[0].plot(
+#     jko_step.x_cell[1::2],
+#     pv[0, -1, 1::2],
+#     label="$\\rho_{t=1}, odd$",
+#     linestyle=None,
+#     marker="+",
+#     markersize=1.5,
+#     color="C0",
+#     linewidth=.3,
+# )
 axs[0].set_title("density")
 
 (l_flux1,) = axs[1].plot(jko_step.x_cell, pv[1, 0, :], label="t = 0")
@@ -148,9 +171,11 @@ def animate(idx):
     )
 
 
-# ani = animation.FuncAnimation(fig, animate, frames=len(history['pv']), interval=1, blit=True)
-# writer = animation.FFMpegWriter(fps=25, metadata=dict(artist="Me"), bitrate=1800)
-# ani.save("movie.gif", writer=writer)
+ani = animation.FuncAnimation(
+    fig, animate, frames=range(0, len(history["pv"]), 20), interval=1, blit=True
+)
+writer = animation.FFMpegWriter(fps=25, metadata=dict(artist="Me"), bitrate=1800)
+ani.save("movie.gif", writer=writer)
 
 
 fig, axs = plt.subplots(nrows=1, ncols=2)
@@ -158,12 +183,12 @@ fig, axs = plt.subplots(nrows=1, ncols=2)
 for key in history.keys():
     if not key.startswith("violation_"):
         continue
-    axs[0].plot(history[key][20:], label=key)
+    axs[0].plot(history[key][:], label=key)
 
 axs[0].axhline(delta, linestyle="--")
 
 for key in ["F", "W", "objective"]:
-    axs[1].plot(history[key][20:], label=key)
+    axs[1].plot(history[key][:], label=key)
 
 axs[0].set_yscale("log")
 axs[0].grid()

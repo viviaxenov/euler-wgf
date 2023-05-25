@@ -98,15 +98,15 @@ class JKO_step:
             ** 0.5
         )
 
-    def get_primal_variables(self) -> np.ndarray:
+    def get_primal_variables(self, m_fill_value=.0) -> np.ndarray:
 
         rho = np.zeros((self.N_t, self.N_x))
         rho[:, :] = self.rho_0_h
-        m = np.full_like(rho, 0.0)
+        m = np.full_like(rho, m_fill_value)
 
         return np.stack((rho, m))
 
-    def get_dual_variables(self, fill_value=1.0) -> Tuple[np.ndarray]:
+    def get_dual_variables(self, fill_value=1.0) -> Tuple[np.ndarray]: # Do i really need fill value here?
         # it's stupid but I'll rewrite it later
         Au = self.apply_A(self.get_primal_variables())
         duals = [np.full_like(_x, fill_value) for _x in Au]
@@ -128,7 +128,7 @@ class JKO_step:
         # use centered difference for d/dx for now, maybe use C.N. later
         # TODO maybe we should make an array of cell vols? for grid with cells of diff.size (but same vol)?
         Au = (rho[1:, :] - rho[:-1, :]) / self.dt + (
-            m[:-1, :-2] - m[:-1, 2:]
+            -m[:-1, :-2] + m[:-1, 2:]
         ) / self.dx / 2.0
 
         return Au * np.sqrt(self.cell_vol * self.dt)
@@ -146,7 +146,7 @@ class JKO_step:
             phi,
             ((0, 1), (1, 1)),
         )
-        m = (-phi_x_pad[:, :-2] + phi_x_pad[:, 2:]) / 2.0 / self.dx
+        m = (phi_x_pad[:, :-2] - phi_x_pad[:, 2:]) / 2.0 / self.dx
 
         return np.stack((rho, m)) * np.sqrt(self.cell_vol * self.dt)
 
@@ -256,11 +256,11 @@ class JKO_step:
         #     errmsg += "root incorrect!; "
 
         if np.any(rho_prox < rho):
-            print("{((rho - rho_prox)).max()=}")
+            print(f"{((rho - rho_prox)).max()=}")
             errmsg += "rho_prox < rho"
 
         if len(errmsg) > 0:
-            raise RuntimeWarning(errmsg)
+            raise RuntimeError(errmsg)
         rho_prox = np.maximum(rho_prox, 0.0)
         m_prox = m * rho_prox / (rho_prox + lam)
 
@@ -428,8 +428,9 @@ class JKO_step:
                 rdiff = np.linalg.norm(u - u_new) / np.linalg.norm(u)
 
                 rho1 = u[0, -1, :]
+                # TODO:
                 # this HARDCODED energy works only for entropy as internal energy, so, e.g. for nonlinear diffusion it will be different
-                # to ouput it correctly I'll have to pass both U, U'
+                # to ouput it correctly I'll have to pass both U, U' and not just U'
                 F = (self.V_cell + np.log(rho1)) @ rho1 * self.cell_vol
                 Wass = (
                     np.where(u[0, :, :] > 0.0, u[1, :, :] ** 2 / u[0, :, :], 0.0).sum()
@@ -498,7 +499,7 @@ class JKO_step:
         oper_norm = dot_in_dual(phi, self.apply_A(self.apply_At(phi))) / dot_in_dual(
             phi, phi
         )
-        print(oper_norm)
+        print(f"||AA^t|| <= {oper_norm}")
 
         lam = beta_guess / self.tau
         sigma = 1.0 / oper_norm / lam
